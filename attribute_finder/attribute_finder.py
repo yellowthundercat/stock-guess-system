@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from config.config import Config
 from vnstock3 import Vnstock
+from datetime import date
 
 
 tcbs_stock_api = Vnstock().stock(symbol='MSN', source="TCBS")
@@ -11,19 +12,10 @@ microsoft_stock_api = Vnstock().stock(symbol='MSN', source="MSN")
 
 
 @dataclass
-class Date:
-    day: int
-    month: int
-    year: int
-
-    def __str__(self):
-        return f"{self.year}-{self.month}-{self.day}"
-
-@dataclass
 class Stock_point:
     # General
     name: str
-    date: Date
+    date: date
 
     #TA
     open: float
@@ -34,24 +26,24 @@ class Stock_point:
     # calculate rsi, ma from price
 
     # company
-    market: str
-    industry_id: str
-    industry_id_v2: str
-    established_year: str
-    top_1_shareholders: str
-    top_2_shareholder: str
-    others_shareholders_percent: float
+    # exchange: str
+    # industry_id: str
+    # industry_id_v2: str
+    # established_year: str
+    # top_1_shareholders: str
+    # top_2_shareholder: str
+    # others_shareholders_percent: float
 
     # FA
 
 class Attribute_finder:
     config: Config
-    data: dict[tuple[Date, str], Stock_point]
+    data: dict[tuple[date, str], Stock_point]
 
     def __init__(self, config: Config):
         self.config = config
 
-    def find_attribute(self, name: str, date: Date):
+    def find_attribute(self, name: str, date: date):
         key = (date, name)
         if key in self.data:
             return self.data[key]
@@ -59,7 +51,7 @@ class Attribute_finder:
             # UPDATE: load from file 
             return self.find_attribute_online(name, date)
         
-    def find_attribute_online(self, name: str, date: Date):
+    def find_attribute_online(self, name: str, date: date):
         # UPDATE: get data from online
         data_point = tcbs_stock_api.quote.history(symbol=name, start=str(date), end=str(date))
         print(data_point)
@@ -77,7 +69,7 @@ class Attribute_finder:
             high=data_point.at[0, 'high'],
             low=data_point.at[0, 'low'],
             volume=data_point.at[0, 'volume'],
-            market=company_overview.at[0, 'exchange'],
+            exchange=company_overview.at[0, 'exchange'],
             industry_id=company_overview.at[0, 'industry_id'],
             industry_id_v2=company_overview.at[0, 'industry_id_v2'],
             established_year=company_overview.at[0, 'established_year'],
