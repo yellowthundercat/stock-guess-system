@@ -2,9 +2,12 @@ from dataclasses import dataclass
 from config.config import Config
 from vnstock3 import Vnstock
 
-DEFAULT_SOURCE = 'VCI'
 
-stock_api = Vnstock().stock(source=DEFAULT_SOURCE)
+tcbs_stock_api = Vnstock().stock(symbol='MSN', source="TCBS")
+vci_stock_api = Vnstock().stock(symbol='MSN', source="VCI")
+microsoft_stock_api = Vnstock().stock(symbol='MSN', source="MSN")
+
+#more data https://github.com/tradingeconomics/tradingeconomics-python, 
 
 
 @dataclass
@@ -23,15 +26,23 @@ class Stock_point:
     date: Date
 
     #TA
-    price: float
-    lowest: float
-    highest: float
+    open: float
+    close: float
+    low: float
+    high: float
     volume: int
+    # calculate rsi, ma from price
+
+    # company
+    market: str
+    industry_id: str
+    industry_id_v2: str
+    established_year: str
+    top_1_shareholders: str
+    top_2_shareholder: str
+    others_shareholders_percent: float
 
     # FA
-    PE: float
-    PB: float
-    EPS: float
 
 class Attribute_finder:
     config: Config
@@ -50,15 +61,27 @@ class Attribute_finder:
         
     def find_attribute_online(self, name: str, date: Date):
         # UPDATE: get data from online
-        data_point = stock_api.quote.history(symbol=name, start=date.__str__, end=date.__str__)
-        # return Stock_point(
-        #     name=name,
-        #     date=date,
-        #     price=stock.quote,
-        #     lowest=stock.get_lowest(name),
-        #     highest=stock.get_highest(name),
-        #     volume=stock.get_volume(name),
-        #     PE=stock.get_PE(name),
-        #     PB=stock.get_PB(name),
-        #     EPS=stock.get_EPS(name)
-        # )
+        data_point = tcbs_stock_api.quote.history(symbol=name, start=str(date), end=str(date))
+        print(data_point)
+        company_overview = tcbs_stock_api.company.overview()
+        shareholders = tcbs_stock_api.company.shareholders()
+        test_data = tcbs_stock_api.company.shareholders()
+        print(test_data)
+        # company data
+
+        return Stock_point(
+            name=name,
+            date=date,
+            open=data_point.at[0, 'open'],
+            close=data_point.at[0, 'close'],
+            high=data_point.at[0, 'high'],
+            low=data_point.at[0, 'low'],
+            volume=data_point.at[0, 'volume'],
+            market=company_overview.at[0, 'exchange'],
+            industry_id=company_overview.at[0, 'industry_id'],
+            industry_id_v2=company_overview.at[0, 'industry_id_v2'],
+            established_year=company_overview.at[0, 'established_year'],
+            top_1_shareholders=shareholders.at[0, 'share_holder'],
+            top_2_shareholder=shareholders.at[1, 'share_holder'],
+            others_shareholders_percent=shareholders.iloc[-1]['share_own_percent']
+        )
