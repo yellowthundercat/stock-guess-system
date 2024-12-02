@@ -172,4 +172,5 @@ def load_company_online(name: str, date_begin: date, date_end: date) -> ICompany
         finances=finances
     )
 
-#more data https://github.com/tradingeconomics/tradingeconomics-python, 
+# more data https://github.com/tradingeconomics/tradingeconomics-python, 
+# analysis report https://api.simplize.vn/api/company/analysis-report/list?ticker=MSN&isWl=false&page=1&size=10
