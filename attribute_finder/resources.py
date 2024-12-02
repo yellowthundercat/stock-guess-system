@@ -6,7 +6,7 @@ import pandas as pd
 
 tcbs_stock_api = Vnstock().stock(symbol='MSN', source="TCBS")
 vci_stock_api = Vnstock().stock(symbol='MSN', source="VCI")
-microsoft_stock_api = Vnstock().stock(symbol='MSN', source="MSN")
+# microsoft_stock_api = Vnstock().stock(symbol='MSN', source="MSN")
 
 def load_macro_online(date_begin: date, date_end: date) -> IMacro:
     return IMacro()
@@ -67,13 +67,8 @@ def load_company_online(name: str, date_begin: date, date_end: date) -> ICompany
     balance_sheet = tcbs_stock_api.finance.balance_sheet(period='quarter')
     cash_flow = tcbs_stock_api.finance.cash_flow(period='quarter')
     ratio = tcbs_stock_api.finance.ratio(period='quarter')
-    print(income_statement)
-    print(balance_sheet)
-    print(cash_flow)
-    print(ratio)
     finance_data = cash_flow.merge(income_statement, on=['period'], suffixes=('_1', '_2')).merge(
         balance_sheet, on=['period'], suffixes=('_2', '_3')).merge(ratio, on=['period'], suffixes=('_3', '_4'))
-    print(finance_data)
 
     finances = {}
     for _, row in finance_data.iterrows():

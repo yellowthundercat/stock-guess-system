@@ -129,7 +129,7 @@ class ICompany:
     month_points: dict[date, IMonth_data]
 
     insider_deals: list[IDeal]
-    finances: dict[tuple[int, int], IFinance]
+    finances: dict[tuple[int, int], IFinance] # year, quarter
 
 @dataclass
 class IMacro:
