@@ -1,25 +1,7 @@
 from dataclasses import dataclass
 from datetime import date
 
-@dataclass
-class Time_data:
-    open: float
-    close: float
-    low: float
-    high: float
-    volume: int
-
-@dataclass
-class IDay_data(Time_data):
-    pass
-
-@dataclass
-class IWeek_data(Time_data):
-    pass
-
-@dataclass
-class IMonth_data(Time_data):
-    pass
+from pandas import DataFrame
 
 @dataclass
 class IDeal:
@@ -124,16 +106,51 @@ class ICompany:
     top_2_shareholder: str
     others_shareholders_percent: float
 
-    day_points: dict[date, IDay_data]
-    week_points: dict[date, IWeek_data]
-    month_points: dict[date, IMonth_data]
+    day_points: DataFrame
+    week_points: DataFrame
+    month_points: DataFrame
 
     insider_deals: list[IDeal]
     finances: dict[tuple[int, int], IFinance] # year, quarter
 
 @dataclass
+class ICountry:
+    name: str
+    # year, value
+    gdq_growth: dict[int, float]
+    real_interest_rate: dict[int, float]
+    unemployment_rate: dict[int, float]
+    inflation: dict[int, float]
+    current_account_balance: dict[int, float]
+    government_debt: dict[int, float]
+
+@dataclass
 class IMacro:
     # vietnam
+    vnindex: ICompany
     # forex
-    # us/china
-    pass
+    usd_day: DataFrame
+    usd_month: DataFrame
+    cny_day: DataFrame
+    cny_month: DataFrame
+    # country
+    vn_country: ICountry
+    us_country: ICountry
+    china_country: ICountry
+    # yahoo finance
+    gold_day: DataFrame
+    gold_month: DataFrame
+    oil_day: DataFrame
+    oil_month: DataFrame
+    vix_day: DataFrame
+    dxy_day: DataFrame
+    dxy_month: DataFrame
+
+    dowjones_day: DataFrame
+    sp500_day: DataFrame
+    shanghai_day: DataFrame
+    hang_seng_day: DataFrame
+    nikkei_day: DataFrame
+    kospi_day: DataFrame
+    btc_day: DataFrame
+    eth_day: DataFrame
