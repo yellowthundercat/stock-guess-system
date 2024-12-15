@@ -96,8 +96,17 @@ class IFinance:
     book_value_per_share_change: float
 
 @dataclass
+class IAnalysis_Report:
+    source: str
+    issueDate: date
+    targetPrice: int
+    recommend: str
+
+
+@dataclass
 class ICompany:
     name: str
+    begin_trade_date: date
     exchange: str
     industry_id: str
     industry_id_v2: str
@@ -112,6 +121,8 @@ class ICompany:
 
     insider_deals: list[IDeal]
     finances: dict[tuple[int, int], IFinance] # year, quarter
+    analysis_reports: dict[(date, str), IAnalysis_Report] # date, source
+
 
 @dataclass
 class ICountry:

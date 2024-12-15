@@ -3,6 +3,7 @@ from datetime import date
 import json
 import os
 import pickle
+import time
 
 from attribute_finder.resources import load_company_online, load_macro_online
 from attribute_finder.type import ICompany, IMacro
@@ -47,7 +48,7 @@ class Data_set:
             logger.warning("meta file not found, creating new one")
             self.date_begin = config.default_begin_date
             self.date_end = config.default_end_date
-            self.company_list = ['MSN']
+            self.company_list = ['MSN', 'AGG', 'HSG', 'TCB', 'PTB', 'HCM', 'REE']
             with open(meta_file, 'w') as f:
                 json.dump({
                     'date_begin': self.date_begin.isoformat(),
@@ -74,5 +75,6 @@ class Data_set:
             else:
                 logger.warning(f"company {company} not found in file, creating new one")
                 self.companies[company] = load_company_online(company, self.date_begin, self.date_end)
+                time.sleep(1) # avoid being banned
                 with open(company_file, 'wb') as f:
                     pickle.dump(self.companies[company], f)

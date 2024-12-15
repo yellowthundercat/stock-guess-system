@@ -1,7 +1,9 @@
+import time
+import requests
 from attribute_finder.constant import *
-from attribute_finder.type import ICompany, ICountry, IDeal, IFinance, IMacro
+from attribute_finder.type import IAnalysis_Report, ICompany, ICountry, IDeal, IFinance, IMacro
 from vnstock3 import Vnstock
-from datetime import date
+from datetime import date, timedelta
 import pandas as pd
 import pandas_ta as ta
 import wbgapi as wb
@@ -16,6 +18,8 @@ fx_stock_api = Vnstock().fx(symbol=USDVND, source='MSN')
 
 logger = Logger(Config.log_level)
 
+begin_date_trade = {}
+
 def add_ta(df: pd.DataFrame) -> pd.DataFrame:
     # TA: Technical Analysis
     my_strategy = ta.Strategy(
@@ -25,13 +29,51 @@ def add_ta(df: pd.DataFrame) -> pd.DataFrame:
             {"kind": "sma", "length": 200},            # SMA 200
             {"kind": "bbands", "length": 20},          # Bollinger Bands
             {"kind": "rsi", "length": 14},             # RSI
-            {"kind": "macd", "fast": 12, "slow": 26, "signal": 9},  # MACD
+            # {"kind": "macd", "fast": 12, "slow": 26, "signal": 9},  # MACD
             {"kind": "sma", "close": "volume", "length": 20},       # Volume SMA 20
             {"kind": "stoch", "k": 14, "d": 3}         # Stochastic Oscillator
         ]
     )
-    df.ta.strategy(my_strategy)
+    df.ta.strategy(my_strategy) 
     return df
+
+def load_chunk_time(real_func):
+    def inner(symbol: str, date_begin: date, date_end: date, interval: str) -> pd.DataFrame:
+        stock_begin = begin_date_trade.get(symbol, date(2010, 1, 1))
+        if date_end < stock_begin:
+            return pd.DataFrame()
+        if date_begin < stock_begin:
+            date_begin = stock_begin
+        
+        lower_interval = interval.lower()
+        # check interval contain d
+        if 'd' in lower_interval:
+            period = (date_end - date_begin).days
+            step = 1
+        if 'w' in lower_interval:
+            period = (date_end - date_begin).days//7
+            step = 7
+        if 'm' in lower_interval:
+            period = (date_end - date_begin).days//30
+            step = 30
+        if 'y' in lower_interval:
+            real_func(symbol, date_begin, date_end, interval)
+        chunk_size = LOAD_TIME_DATA_CHUNK_SIZE
+        if period > chunk_size:
+            chunks = [date_begin + timedelta(days=-1)]
+            for _ in range(1, period//chunk_size):
+                chunks.append(chunks[-1] + timedelta(days=chunk_size*step))
+            chunks.append(date_end)
+            return pd.concat([real_func(symbol, chunks[i] + timedelta(days=1), chunks[i+1], interval) for i in range(len(chunks)-1)])
+        else:
+            return real_func(symbol, date_begin, date_end, interval)
+    return inner
+
+def add_ta_decorator(real_func):
+    def inner(symbol: str, date_begin: date, date_end: date, interval: str):
+        df = real_func(symbol, date_begin, date_end, interval)
+        return add_ta(df) if df.shape[0] > 20 else df
+    return inner
 
 def vnstock_to_time_data(df: pd.DataFrame) -> pd.DataFrame:
     df = df.rename(columns={
@@ -47,25 +89,29 @@ def vnstock_to_time_data(df: pd.DataFrame) -> pd.DataFrame:
     df.set_index("Date", inplace=True)
     return df
 
+@add_ta_decorator
+@load_chunk_time
 def load_fx_online(symbol: str, date_begin: date, date_end: date, interval: str) -> pd.DataFrame:
     logger.info(f"loading fx data {symbol} from {date_begin} to {date_end} with interval {interval}")
     historical_data = fx_stock_api.quote.history(symbol=symbol, start=date_begin.isoformat(), end=date_end.isoformat(), interval=interval)
     df = vnstock_to_time_data(historical_data)
     return df
 
+@add_ta_decorator
+@load_chunk_time
 def load_yahoo_finance_online(symbol: str, date_begin: date, date_end: date, interval: str) -> pd.DataFrame:
     logger.info(f"loading yahoo finance data {symbol} from {date_begin} to {date_end} with interval {interval}")
     ticker = yf.Ticker(symbol)
     historical_data = ticker.history(interval=interval, start=date_begin, end=date_end) 
-    df = add_ta(historical_data) if interval == '1d' else historical_data
-    return df
+    return historical_data
 
+@add_ta_decorator
+@load_chunk_time
 def load_vnstock_online(symbol: str, date_begin: date, date_end: date, interval: str) -> pd.DataFrame:
     logger.info(f"loading vnstock data {symbol} from {date_begin} to {date_end} with interval {interval}")
     vci_stock_api.update_symbol(symbol)
     historical_data = vci_stock_api.quote.history(start=date_begin.isoformat(), end=date_end.isoformat(), interval=interval)
     df = vnstock_to_time_data(historical_data)
-    df = add_ta(df) if interval == '1D' else df
     return df
 
 def load_world_bank_online(country: str, indicator: str, year_begin: int, year_end: int) -> dict[int, float]:
@@ -75,6 +121,54 @@ def load_world_bank_online(country: str, indicator: str, year_begin: int, year_e
     for row in wb.data.fetch(indicator, country, range(year_begin, year_end)): 
         year = int(row['time'][-4:])
         return {year: row['value']}
+    
+def get_the_begin_date(symbol: str) -> date:
+    left_date = date(2010, 1, 1)
+    right_date = date.today()
+    while left_date < right_date:
+        current_date = left_date + (right_date - left_date)//2
+        try:
+            load_vnstock_online(symbol, current_date, current_date + timedelta(days=1), '1D')
+            right_date = current_date
+        except Exception as e:
+            left_date = current_date + timedelta(days=1)
+
+    logger.info(f"the begin date of {symbol} is {right_date}")
+    return right_date
+
+def load_analysis_report_online(symbol: str) -> dict[(date, str), IAnalysis_Report]:
+    url = "https://api.simplize.vn/api/company/analysis-report/list"
+    result = {}
+    page_number = 0
+    while True:
+        params = {
+            "ticker": symbol,
+            "isWl": "false",
+            "page": page_number,
+            "size": CHUNK_SIZE
+        }
+        page_number += 1
+        response = requests.get(url, params=params)
+        if response.status_code == 200:
+            res = response.json()
+            total = res['total']
+            data = res['data']
+            result.update({
+                (row['issueDate'],row['source']) : IAnalysis_Report(
+                    source=row['source'],
+                    issueDate=row['issueDate'],
+                    targetPrice=row.get('targetPrice', 0),
+                    recommend=row['recommend']
+                ) for row in data
+            })
+            if page_number*CHUNK_SIZE >= total:
+                break
+        else:
+            logger.error(f"cannot load analysis report for {symbol}, status code {response.status_code}")
+            break
+
+    logger.info(f"loaded {len(result)} analysis reports for {symbol}")
+    return result
 
 def load_country_online(country: str, year_begin: int, year_end: int) -> ICountry:
     return ICountry(
@@ -121,6 +215,7 @@ def load_company_online(name: str, date_begin: date, date_end: date) -> ICompany
     tcbs_stock_api.update_symbol(name)
     company_overview = tcbs_stock_api.company.overview()
     shareholders = tcbs_stock_api.company.shareholders()
+    begin_date_trade[name] = get_the_begin_date(name)
 
     insider_data_res = tcbs_stock_api.company.insider_deals(page_size=100)
     insider_deals = [
@@ -141,93 +236,94 @@ def load_company_online(name: str, date_begin: date, date_end: date) -> ICompany
 
     finances = {}
     for _, row in finance_data.iterrows():
-        finances[(row['year_1'], row['quarter_1'])] = IFinance(
-            quarter=row['quarter_1'],
-            year=row['year_1'],
-            revenue=row['revenue'],
-            year_revenue_growth=row['year_revenue_growth'],
-            quarter_revenue_growth=row['quarter_revenue_growth'],
-            cost_of_good_sold=row['cost_of_good_sold'],
-            gross_profit=row['gross_profit'],
-            operation_expense=row['operation_expense'],
-            operation_profit=row['operation_profit'],
-            year_operation_profit_growth=row['year_operation_profit_growth'],
-            quarter_operation_profit_growth=row['quarter_operation_profit_growth'],
-            interest_expense=row['interest_expense'],
-            pre_tax_profit=row['pre_tax_profit'],
-            post_tax_profit=row['post_tax_profit'],
-            share_holder_income=row['share_holder_income'],
-            year_share_holder_income_growth=row['year_share_holder_income_growth'],
-            quarter_share_holder_income_growth=row['quarter_share_holder_income_growth'],
-            ebitda=row['ebitda'],
+        finances[(row.get('year_1'), row.get('quarter_1'))] = IFinance(
+            quarter=row.get('quarter_1'),
+            year=row.get('year_1'),
+            revenue=row.get('revenue'),
+            year_revenue_growth=row.get('year_revenue_growth'),
+            quarter_revenue_growth=row.get('quarter_revenue_growth'),
+            cost_of_good_sold=row.get('cost_of_good_sold'),
+            gross_profit=row.get('gross_profit'),
+            operation_expense=row.get('operation_expense'),
+            operation_profit=row.get('operation_profit'),
+            year_operation_profit_growth=row.get('year_operation_profit_growth'),
+            quarter_operation_profit_growth=row.get('quarter_operation_profit_growth'),
+            interest_expense=row.get('interest_expense'),
+            pre_tax_profit=row.get('pre_tax_profit'),
+            post_tax_profit=row.get('post_tax_profit'),
+            share_holder_income=row.get('share_holder_income'),
+            year_share_holder_income_growth=row.get('year_share_holder_income_growth'),
+            quarter_share_holder_income_growth=row.get('quarter_share_holder_income_growth'),
+            ebitda=row.get('ebitda'),
             # balance sheet
-            short_asset=row['short_asset'],
-            cash=row['cash'],
-            short_invest=row['short_invest'],
-            short_receivable=row['short_receivable'],
-            inventory=row['inventory'],
-            long_asset = row['long_asset'],
-            fixed_asset = row['fixed_asset'],
-            asset = row['asset'],
-            debt = row['debt'],
-            short_debt = row['short_debt'],
-            long_debt = row['long_debt'],
-            equity=row['equity'],
-            capital=row['capital'],
-            other_debt=row['other_debt'],
-            un_distributed_income=row['un_distributed_income'],
-            minor_share_holder_profit=row['minor_share_holder_profit'],
-            payable=row['payable'],
+            short_asset=row.get('short_asset'),
+            cash=row.get('cash'),
+            short_invest=row.get('short_invest'),
+            short_receivable=row.get('short_receivable'),
+            inventory=row.get('inventory'),
+            long_asset=row.get('long_asset'),
+            fixed_asset=row.get('fixed_asset'),
+            asset=row.get('asset'),
+            debt=row.get('debt'),
+            short_debt=row.get('short_debt'),
+            long_debt=row.get('long_debt'),
+            equity=row.get('equity'),
+            capital=row.get('capital'),
+            other_debt=row.get('other_debt'),
+            un_distributed_income=row.get('un_distributed_income'),
+            minor_share_holder_profit=row.get('minor_share_holder_profit'),
+            payable=row.get('payable'),
             # cash flow
-            invest_cost=row['invest_cost'],
-            from_invest=row['from_invest'],
-            from_financial=row['from_financial'],
-            from_sale=row['from_sale'],
-            free_cash_flow=row['free_cash_flow'],
+            invest_cost=row.get('invest_cost'),
+            from_invest=row.get('from_invest'),
+            from_financial=row.get('from_financial'),
+            from_sale=row.get('from_sale'),
+            free_cash_flow=row.get('free_cash_flow'),
             # ratio
-            price_to_earning=row['price_to_earning'],
-            price_to_book=row['price_to_book'],
-            value_before_ebitda=row['value_before_ebitda'],
-            roe=row['roe'],
-            roa=row['roa'],
-            days_receivable=row['days_receivable'],
-            days_inventory=row['days_inventory'],
-            days_payable=row['days_payable'],
-            ebit_on_interest=row['ebit_on_interest'],
-            earning_per_share=row['earning_per_share'],
-            book_value_per_share=row['book_value_per_share'],
-            equity_on_total_asset=row['equity_on_total_asset'],
-            equity_on_liability=row['equity_on_liability'],
-            current_payment=row['current_payment'],
-            quick_payment=row['quick_payment'],
-            eps_change=row['eps_change'],
-            ebitda_on_stock=row['ebitda_on_stock'],
-            gross_profit_margin=row['gross_profit_margin'],
-            operating_profit_margin=row['operating_profit_margin'],
-            post_tax_margin=row['post_tax_margin'],
-            debt_on_equity=row['debt_on_equity'],
-            debt_on_asset=row['debt_on_asset'],
-            debt_on_ebitda=row['debt_on_ebitda'],
-            short_on_long_debt=row['short_on_long_debt'],
-            asset_on_equity=row['asset_on_equity'],
-            capital_balance=row['capital_balance'],
-            cash_on_equity=row['cash_on_equity'],
-            cash_on_capitalize=row['cash_on_capitalize'],
-            cash_circulation=row['cash_circulation'],
-            revenue_on_work_capital=row['revenue_on_work_capital'],
-            capex_on_fixed_asset=row['capex_on_fixed_asset'],
-            revenue_on_asset=row['revenue_on_asset'],
-            post_tax_on_pre_tax=row['post_tax_on_pre_tax'],
-            ebit_on_revenue=row['ebit_on_revenue'],
-            pre_tax_on_ebit=row['pre_tax_on_ebit'],
-            payable_on_equity=row['payable_on_equity'],
-            ebitda_on_stock_change=row['ebitda_on_stock_change'],
-            book_value_per_share_change=row['book_value_per_share_change']
+            price_to_earning=row.get('price_to_earning'),
+            price_to_book=row.get('price_to_book'),
+            value_before_ebitda=row.get('value_before_ebitda'),
+            roe=row.get('roe'),
+            roa=row.get('roa'),
+            days_receivable=row.get('days_receivable'),
+            days_inventory=row.get('days_inventory'),
+            days_payable=row.get('days_payable'),
+            ebit_on_interest=row.get('ebit_on_interest'),
+            earning_per_share=row.get('earning_per_share'),
+            book_value_per_share=row.get('book_value_per_share'),
+            equity_on_total_asset=row.get('equity_on_total_asset'),
+            equity_on_liability=row.get('equity_on_liability'),
+            current_payment=row.get('current_payment'),
+            quick_payment=row.get('quick_payment'),
+            eps_change=row.get('eps_change'),
+            ebitda_on_stock=row.get('ebitda_on_stock'),
+            gross_profit_margin=row.get('gross_profit_margin'),
+            operating_profit_margin=row.get('operating_profit_margin'),
+            post_tax_margin=row.get('post_tax_margin'),
+            debt_on_equity=row.get('debt_on_equity'),
+            debt_on_asset=row.get('debt_on_asset'),
+            debt_on_ebitda=row.get('debt_on_ebitda'),
+            short_on_long_debt=row.get('short_on_long_debt'),
+            asset_on_equity=row.get('asset_on_equity'),
+            capital_balance=row.get('capital_balance'),
+            cash_on_equity=row.get('cash_on_equity'),
+            cash_on_capitalize=row.get('cash_on_capitalize'),
+            cash_circulation=row.get('cash_circulation'),
+            revenue_on_work_capital=row.get('revenue_on_work_capital'),
+            capex_on_fixed_asset=row.get('capex_on_fixed_asset'),
+            revenue_on_asset=row.get('revenue_on_asset'),
+            post_tax_on_pre_tax=row.get('post_tax_on_pre_tax'),
+            ebit_on_revenue=row.get('ebit_on_revenue'),
+            pre_tax_on_ebit=row.get('pre_tax_on_ebit'),
+            payable_on_equity=row.get('payable_on_equity'),
+            ebitda_on_stock_change=row.get('ebitda_on_stock_change'),
+            book_value_per_share_change=row.get('book_value_per_share_change')
         )
 
     return ICompany(
         name=name,
         exchange=company_overview.at[0, 'exchange'],
+        begin_trade_date=begin_date_trade[name],
         industry_id=company_overview.at[0, 'industry_id'],
         industry_id_v2=company_overview.at[0, 'industry_id_v2'],
         established_year=company_overview.at[0, 'established_year'],
@@ -238,7 +334,44 @@ def load_company_online(name: str, date_begin: date, date_end: date) -> ICompany
         week_points=load_vnstock_online(name, date_begin, date_end, '1W'),
         month_points=load_vnstock_online(name, date_begin, date_end, '1M'),
         insider_deals=insider_deals,
-        finances=finances
+        finances=finances,
+        analysis_reports=load_analysis_report_online(name)
     )
 
-# analysis report https://api.simplize.vn/api/company/analysis-report/list?ticker=MSN&isWl=false&page=1&size=10
+def get_company_equity(symbol: str) -> float:
+    vci_stock_api.update_symbol(symbol)
+    balance_sheet = vci_stock_api.finance.balance_sheet(period='quarter')
+    first_row = balance_sheet.iloc[0]
+    return first_row["OWNER'S EQUITY(Bn.VND)"] / 1000000000
+
+def get_company_average_volume(symbol: str) -> float:
+    vci_stock_api.update_symbol(symbol)
+    current_date = date.today()
+    begin_date = current_date - timedelta(days=30)
+    historical_data = vci_stock_api.quote.history(start=begin_date.isoformat(), end=current_date.isoformat(), interval='1D')
+    return (historical_data['volume'].mean() * historical_data['close'].mean()) / 1000000
+    
+def get_company_list() -> list[str]:
+    result = []
+    companies = vci_stock_api.listing.all_symbols()
+    for _, row in companies.iterrows():
+        symbol = row['ticker']
+        try:
+            equity = get_company_equity(symbol)
+            if equity < 1000:
+                continue
+            average_volume = get_company_average_volume(symbol)
+            if average_volume < 1:
+                continue
+        except Exception as e:
+            logger.error(f"cannot load company {symbol} ", e)
+            continue
+        print(symbol, equity, average_volume)
+            
+        result.append(symbol)
+    
+    # save to file
+    with open('company_list.txt', 'w') as f:
+        for item in result:
+            f.write("%s\n" % item)
+    return result
