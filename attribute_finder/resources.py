@@ -1,7 +1,7 @@
 import time
 import requests
 from attribute_finder.constant import *
-from attribute_finder.type import IAnalysis_Report, ICompany, ICountry, IDeal, IFinance, IMacro
+from attribute_finder.type import IAnalysis_Report, ICompany, ICountry, IDeal, IMacro
 from vnstock3 import Vnstock
 from datetime import date, timedelta
 import pandas as pd
@@ -77,19 +77,18 @@ def add_ta_decorator(real_func):
 
 def vnstock_to_time_data(df: pd.DataFrame) -> pd.DataFrame:
     df = df.rename(columns={
-        "time": "Date",
-        "open": "Open",
-        "high": "High",
-        "low": "Low",
-        "close": "Close",
-        "volume": "Volume"
+        "time": DATE,
+        "open": OPEN,
+        "high": HIGH,
+        "low": LOW,
+        "close": CLOSE,
+        "volume": VOLUME
     })
-    # Ensure 'Date' is a datetime object
+    # Ensure 'Date' is a panda datetime object
     df["Date"] = pd.to_datetime(df["Date"])
     df.set_index("Date", inplace=True)
     return df
 
-@add_ta_decorator
 @load_chunk_time
 def load_fx_online(symbol: str, date_begin: date, date_end: date, interval: str) -> pd.DataFrame:
     logger.info(f"loading fx data {symbol} from {date_begin} to {date_end} with interval {interval}")
@@ -97,15 +96,15 @@ def load_fx_online(symbol: str, date_begin: date, date_end: date, interval: str)
     df = vnstock_to_time_data(historical_data)
     return df
 
-@add_ta_decorator
 @load_chunk_time
 def load_yahoo_finance_online(symbol: str, date_begin: date, date_end: date, interval: str) -> pd.DataFrame:
     logger.info(f"loading yahoo finance data {symbol} from {date_begin} to {date_end} with interval {interval}")
     ticker = yf.Ticker(symbol)
-    historical_data = ticker.history(interval=interval, start=date_begin, end=date_end) 
-    return historical_data
+    df = ticker.history(interval=interval, start=date_begin, end=date_end) 
+    # remove localize timezone
+    df.index = df.index.tz_localize(None)
+    return df
 
-@add_ta_decorator
 @load_chunk_time
 def load_vnstock_online(symbol: str, date_begin: date, date_end: date, interval: str) -> pd.DataFrame:
     logger.info(f"loading vnstock data {symbol} from {date_begin} to {date_end} with interval {interval}")
@@ -118,9 +117,11 @@ def load_world_bank_online(country: str, indicator: str, year_begin: int, year_e
     logger.info(f"loading world bank data {indicator} for {country} from {year_begin} to {year_end}")
     if year_begin >= year_end:
         year_begin = year_end - 1
+    result = {}
     for row in wb.data.fetch(indicator, country, range(year_begin, year_end)): 
         year = int(row['time'][-4:])
-        return {year: row['value']}
+        result[year] = row['value']
+    return result
     
 def get_the_begin_date(symbol: str) -> date:
     left_date = date(2010, 1, 1)
@@ -181,18 +182,17 @@ def load_country_online(country: str, year_begin: int, year_end: int) -> ICountr
         government_debt=load_world_bank_online(country, GOVERNMENT_DEBT, year_begin, year_end)
     )
 
-def load_macro_online(date_begin: date, date_end: date) -> IMacro:
+def load_macro_online(date_begin: date, date_end: date, extend_date_begin: date) -> IMacro:
     return IMacro(
-        vnindex=load_company_online(VNINDEX, date_begin, date_end),
-        vn_country=load_country_online(VIET_NAM_ID, date_begin.year, date_end.year),
-        us_country=load_country_online(USA_ID, date_begin.year, date_end.year),
-        china_country=load_country_online(CHINA_ID, date_begin.year, date_end.year),
+        vnindex=load_company_online(VNINDEX, date_begin, date_end, extend_date_begin),
+        vn_country=load_country_online(VIET_NAM_ID, extend_date_begin.year, date_end.year),
+        us_country=load_country_online(USA_ID, extend_date_begin.year, date_end.year),
+        china_country=load_country_online(CHINA_ID, extend_date_begin.year, date_end.year),
 
         gold_day=load_yahoo_finance_online(GOLD, date_begin, date_end, '1d'),
-        gold_month=load_yahoo_finance_online(GOLD, date_begin, date_end, '1mo'),
+        gold_month=load_yahoo_finance_online(GOLD, extend_date_begin, date_end, '1mo'),
         oil_day=load_yahoo_finance_online(BRENT_OIL, date_begin, date_end, '1d'),
-        oil_month=load_yahoo_finance_online(BRENT_OIL, date_begin, date_end, '1mo'),
-        vix_day=load_yahoo_finance_online(VIX, date_begin, date_end, '1d'),
+        oil_month=load_yahoo_finance_online(BRENT_OIL, extend_date_begin, date_end, '1mo'),
 
         dowjones_day=load_yahoo_finance_online(DOWJONES, date_begin, date_end, '1d'),
         sp500_day=load_yahoo_finance_online(SP500, date_begin, date_end, '1d'),
@@ -201,17 +201,16 @@ def load_macro_online(date_begin: date, date_end: date) -> IMacro:
         nikkei_day=load_yahoo_finance_online(NIKKEI, date_begin, date_end, '1d'),
         kospi_day=load_yahoo_finance_online(KOSPI, date_begin, date_end, '1d'),
         btc_day=load_yahoo_finance_online(BTC, date_begin, date_end, '1d'),
-        eth_day=load_yahoo_finance_online(ETH, date_begin, date_end, '1d'),
         dxy_day=load_yahoo_finance_online(DXY, date_begin, date_end, '1d'),
-        dxy_month=load_yahoo_finance_online(DXY, date_begin, date_end, '1mo'),
+        dxy_month=load_yahoo_finance_online(DXY, extend_date_begin, date_end, '1mo'),
 
         usd_day=load_fx_online(USDVND, date_begin, date_end, '1D'),
-        usd_month=load_fx_online(USDVND, date_begin, date_end, '1M'),
+        usd_month=load_fx_online(USDVND, extend_date_begin, date_end, '1M'),
         cny_day=load_fx_online(CNYVND, date_begin, date_end, '1D'),
-        cny_month=load_fx_online(CNYVND, date_begin, date_end, '1M')
+        cny_month=load_fx_online(CNYVND, extend_date_begin, date_end, '1M')
     )
 
-def load_company_online(name: str, date_begin: date, date_end: date) -> ICompany:
+def load_company_online(name: str, date_begin: date, date_end: date, extend_date_begin: date) -> ICompany:
     tcbs_stock_api.update_symbol(name)
     company_overview = tcbs_stock_api.company.overview()
     shareholders = tcbs_stock_api.company.shareholders()
@@ -231,94 +230,12 @@ def load_company_online(name: str, date_begin: date, date_end: date) -> ICompany
     balance_sheet = tcbs_stock_api.finance.balance_sheet(period='quarter')
     cash_flow = tcbs_stock_api.finance.cash_flow(period='quarter')
     ratio = tcbs_stock_api.finance.ratio(period='quarter')
-    finance_data = cash_flow.merge(income_statement, on=['period'], suffixes=('_1', '_2')).merge(
-        balance_sheet, on=['period'], suffixes=('_2', '_3')).merge(ratio, on=['period'], suffixes=('_3', '_4'))
-
-    finances = {}
-    for _, row in finance_data.iterrows():
-        finances[(row.get('year_1'), row.get('quarter_1'))] = IFinance(
-            quarter=row.get('quarter_1'),
-            year=row.get('year_1'),
-            revenue=row.get('revenue'),
-            year_revenue_growth=row.get('year_revenue_growth'),
-            quarter_revenue_growth=row.get('quarter_revenue_growth'),
-            cost_of_good_sold=row.get('cost_of_good_sold'),
-            gross_profit=row.get('gross_profit'),
-            operation_expense=row.get('operation_expense'),
-            operation_profit=row.get('operation_profit'),
-            year_operation_profit_growth=row.get('year_operation_profit_growth'),
-            quarter_operation_profit_growth=row.get('quarter_operation_profit_growth'),
-            interest_expense=row.get('interest_expense'),
-            pre_tax_profit=row.get('pre_tax_profit'),
-            post_tax_profit=row.get('post_tax_profit'),
-            share_holder_income=row.get('share_holder_income'),
-            year_share_holder_income_growth=row.get('year_share_holder_income_growth'),
-            quarter_share_holder_income_growth=row.get('quarter_share_holder_income_growth'),
-            ebitda=row.get('ebitda'),
-            # balance sheet
-            short_asset=row.get('short_asset'),
-            cash=row.get('cash'),
-            short_invest=row.get('short_invest'),
-            short_receivable=row.get('short_receivable'),
-            inventory=row.get('inventory'),
-            long_asset=row.get('long_asset'),
-            fixed_asset=row.get('fixed_asset'),
-            asset=row.get('asset'),
-            debt=row.get('debt'),
-            short_debt=row.get('short_debt'),
-            long_debt=row.get('long_debt'),
-            equity=row.get('equity'),
-            capital=row.get('capital'),
-            other_debt=row.get('other_debt'),
-            un_distributed_income=row.get('un_distributed_income'),
-            minor_share_holder_profit=row.get('minor_share_holder_profit'),
-            payable=row.get('payable'),
-            # cash flow
-            invest_cost=row.get('invest_cost'),
-            from_invest=row.get('from_invest'),
-            from_financial=row.get('from_financial'),
-            from_sale=row.get('from_sale'),
-            free_cash_flow=row.get('free_cash_flow'),
-            # ratio
-            price_to_earning=row.get('price_to_earning'),
-            price_to_book=row.get('price_to_book'),
-            value_before_ebitda=row.get('value_before_ebitda'),
-            roe=row.get('roe'),
-            roa=row.get('roa'),
-            days_receivable=row.get('days_receivable'),
-            days_inventory=row.get('days_inventory'),
-            days_payable=row.get('days_payable'),
-            ebit_on_interest=row.get('ebit_on_interest'),
-            earning_per_share=row.get('earning_per_share'),
-            book_value_per_share=row.get('book_value_per_share'),
-            equity_on_total_asset=row.get('equity_on_total_asset'),
-            equity_on_liability=row.get('equity_on_liability'),
-            current_payment=row.get('current_payment'),
-            quick_payment=row.get('quick_payment'),
-            eps_change=row.get('eps_change'),
-            ebitda_on_stock=row.get('ebitda_on_stock'),
-            gross_profit_margin=row.get('gross_profit_margin'),
-            operating_profit_margin=row.get('operating_profit_margin'),
-            post_tax_margin=row.get('post_tax_margin'),
-            debt_on_equity=row.get('debt_on_equity'),
-            debt_on_asset=row.get('debt_on_asset'),
-            debt_on_ebitda=row.get('debt_on_ebitda'),
-            short_on_long_debt=row.get('short_on_long_debt'),
-            asset_on_equity=row.get('asset_on_equity'),
-            capital_balance=row.get('capital_balance'),
-            cash_on_equity=row.get('cash_on_equity'),
-            cash_on_capitalize=row.get('cash_on_capitalize'),
-            cash_circulation=row.get('cash_circulation'),
-            revenue_on_work_capital=row.get('revenue_on_work_capital'),
-            capex_on_fixed_asset=row.get('capex_on_fixed_asset'),
-            revenue_on_asset=row.get('revenue_on_asset'),
-            post_tax_on_pre_tax=row.get('post_tax_on_pre_tax'),
-            ebit_on_revenue=row.get('ebit_on_revenue'),
-            pre_tax_on_ebit=row.get('pre_tax_on_ebit'),
-            payable_on_equity=row.get('payable_on_equity'),
-            ebitda_on_stock_change=row.get('ebitda_on_stock_change'),
-            book_value_per_share_change=row.get('book_value_per_share_change')
-        )
+    # ratio['quarter'] = ratio['quarter'].astype(str) # convert to string for merging
+    ratio = ratio[['price_to_earning', 'price_to_book', 'roe', 'roa', 'equity_on_liability',
+                   'gross_profit_margin', 'operating_profit_margin', 'debt_on_equity', 'cash_on_equity']]
+    merged_df = pd.merge(income_statement, balance_sheet, on=['quarter', 'year', 'period'], how='inner')
+    merged_df = pd.merge(merged_df, cash_flow, on=['quarter', 'year', 'period'], how='inner')
+    merged_df = pd.merge(merged_df, ratio, on=['period'], how='inner')
 
     return ICompany(
         name=name,
@@ -327,14 +244,14 @@ def load_company_online(name: str, date_begin: date, date_end: date) -> ICompany
         industry_id=company_overview.at[0, 'industry_id'],
         industry_id_v2=company_overview.at[0, 'industry_id_v2'],
         established_year=company_overview.at[0, 'established_year'],
-        top_1_shareholders=shareholders.at[0, 'share_holder'],
-        top_2_shareholder=shareholders.at[1, 'share_holder'],
+        # top_1_shareholders=shareholders.at[0, 'share_holder'],
+        # top_2_shareholder=shareholders.at[1, 'share_holder'],
         others_shareholders_percent=shareholders.iloc[-1]['share_own_percent'],
-        day_points=load_vnstock_online(name, date_begin, date_end, '1D'),
-        week_points=load_vnstock_online(name, date_begin, date_end, '1W'),
-        month_points=load_vnstock_online(name, date_begin, date_end, '1M'),
+        day_points=add_ta(load_vnstock_online(name, extend_date_begin, date_end, '1D')),
+        # week_points=load_vnstock_online(name, date_begin, date_end, '1W'),
+        month_points=load_vnstock_online(name, extend_date_begin, date_end, '1M'),
         insider_deals=insider_deals,
-        finances=finances,
+        finances=merged_df,
         analysis_reports=load_analysis_report_online(name)
     )
 

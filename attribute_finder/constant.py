@@ -32,3 +32,24 @@ CNYVND = 'CNYVND'
 CHUNK_SIZE = 50
 
 LOAD_TIME_DATA_CHUNK_SIZE = 100
+
+# standardize
+DATE = 'Date'
+OPEN = 'Open'
+HIGH = 'High'
+LOW = 'Low'
+CLOSE = 'Close'
+VOLUME = 'Volume'
+
+# ta
+SMA_50 = 'SMA_50'
+SMA_200 = 'SMA_200'
+BBL = 'BBL_20_2.0'
+BBM = 'BBM_20_2.0'
+BBU = 'BBU_20_2.0'
+BBB = 'BBB_20_2.0'
+BBP = 'BBP_20_2.0'
+RSI = 'RSI_14'
+VOL_SMA_20 = 'SMA_20'
+STOCHK = 'STOCHk_14_3_3'
+STOCHD = 'STOCHd_14_3_3'
