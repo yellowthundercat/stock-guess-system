@@ -8,7 +8,7 @@ import time
 
 import pandas as pd
 
-from attribute_finder.attribute_finder import get_day_data, get_flat_data, get_month_data, get_quarter_data
+from attribute_finder.attribute_finder import get_analysis_feature, get_day_data, get_flat_data, get_month_data, get_quarter_data
 from attribute_finder.pmi import PMI
 from attribute_finder.resources import load_company_online, load_macro_online
 from attribute_finder.type import ICompany, IMacro, Input_Data, Output_Data, Scaler_Meta
@@ -56,7 +56,7 @@ class Data_set:
             self.date_begin = config.default_begin_date
             self.date_end = config.default_end_date
             self.extend_date_begin = config.extend_begin_date
-            self.company_list = ['MSN', 'AGG']
+            self.company_list = config.default_company_list
             with open(meta_file, 'w') as f:
                 json.dump({
                     'date_begin': self.date_begin.isoformat(),
@@ -245,13 +245,13 @@ class Data_set:
             train_output.mid_term_result = np.concatenate([train_output.mid_term_result, company_output.mid_term_result[end_test_position:]], axis=0)
             train_output.long_term_result = np.concatenate([train_output.long_term_result, company_output.long_term_result[end_test_position:]], axis=0)
 
-            train_input.name_data = np.concatenate([train_input.name_data, np.array([company] * (comapany_len-validate_size-test_size))], axis=0)
-            validate_input.name_data = np.concatenate([validate_input.name_data, np.array([company] * (validate_size))], axis=0)
-            test_input.name_data = np.concatenate([test_input.name_data, np.array([company] * (test_size))], axis=0)
+            train_input.name_data = np.concatenate([train_input.name_data, np.array([company] * (comapany_len-validate_size-test_size)).astype(str)], axis=0)
+            validate_input.name_data = np.concatenate([validate_input.name_data, np.array([company] * (validate_size)).astype(str)], axis=0)
+            test_input.name_data = np.concatenate([test_input.name_data, np.array([company] * (test_size)).astype(str)], axis=0)
             
-            train_input.industry_id_data = np.concatenate([train_input.industry_id_data, np.array([industry_id] * (comapany_len-validate_size-test_size))], axis=0)
-            validate_input.industry_id_data = np.concatenate([validate_input.industry_id_data, np.array([industry_id] * (validate_size))], axis=0)
-            test_input.industry_id_data = np.concatenate([test_input.industry_id_data, np.array([industry_id] * (test_size))], axis=0)
+            train_input.industry_id_data = np.concatenate([train_input.industry_id_data, np.array([industry_id] * (comapany_len-validate_size-test_size)).astype(str)], axis=0)
+            validate_input.industry_id_data = np.concatenate([validate_input.industry_id_data, np.array([industry_id] * (validate_size)).astype(str)], axis=0)
+            test_input.industry_id_data = np.concatenate([test_input.industry_id_data, np.array([industry_id] * (test_size)).astype(str)], axis=0)
 
         # scaling
         flat_mean = np.mean(train_input.flat_data, axis=0)
@@ -299,6 +299,12 @@ class Data_set:
         logger.info(f"validate data: {validate_input.day_data.shape}, {validate_input.month_data.shape}, {validate_input.quarter_data.shape}, {validate_input.flat_data.shape}")
         logger.info(f"test data: {test_input.day_data.shape}, {test_input.month_data.shape}, {test_input.quarter_data.shape}, {test_input.flat_data.shape}")
         
+        unique_name = np.unique(train_input.name_data)
+        unique_industry = np.unique(train_input.industry_id_data)
+        logger.info(f"unique name: {len(unique_name)}, unique industry: {len(unique_industry)}")
+        self.config.name_num = len(unique_name)
+        self.config.industry_num = len(unique_industry)
+
         self.store_preprocessed_data(train_input, train_output, validate_input, validate_output, test_input, test_output, meta)
         return (train_input, train_output), (validate_input, validate_output), (test_input, test_output), meta    
     
@@ -332,21 +338,25 @@ class Data_set:
                 continue
             while len(all_day_data) > 0 and i < all_day_data[0][0]:
                 all_day_data = all_day_data[1:]
-            company_day_data.append(all_day_data[:self.config.day_data_size, 1:])
+            temp = all_day_data[:self.config.day_data_size, 1:][::-1]
+            company_day_data.append(temp)
             while len(all_month_data) > 0 and i < all_month_data[0][0]:
                 all_month_data = all_month_data[1:]
-            company_month_data.append(all_month_data[:self.config.month_data_size, 1:])
+            temp = all_month_data[:self.config.month_data_size, 1:][::-1]
+            company_month_data.append(temp)
             while len(all_quarter_data) > 0 and (i.year < all_quarter_data[0][1] or 
                                                  (i.year == all_quarter_data[0][1] and i.quarter <= all_quarter_data[0][0])):
                 all_quarter_data = all_quarter_data[1:]
             temp = all_quarter_data[:self.config.quarter_data_size, 2:]
             if len(temp) < self.config.quarter_data_size:
-                empty = np.zeros((self.config.quarter_data_size - len(temp), 51))
+                empty = np.zeros((self.config.quarter_data_size - len(temp), QUARTER_SIZE))
                 temp = np.concatenate([temp, empty], axis=0)
+            temp = temp[::-1]
             company_quarter_data.append(temp)
             while len(all_flat_data) > 0 and i.year <= all_flat_data[0][0]:
                 all_flat_data = all_flat_data[1:]
-            company_flat_data.append([i.day, i.month, i.year] + all_flat_data[0, 1:].tolist())
+            temp = [i.day, i.month, i.year] + all_flat_data[0, 1:].tolist() + get_analysis_feature(company_data, i.quarter, i.year)
+            company_flat_data.append(temp)
 
         company_day_data.reverse()
         company_month_data.reverse()
@@ -415,8 +425,8 @@ class Data_set:
         for i in pd.date_range(date, date + delta):
             if i in self.companies[company].day_points.index:
                 end_price = self.companies[company].day_points.loc[i, CLOSE]
-                highest = max(highest, end_price)
-                if highest / end_price > self.config.stop_lost_ratio + 1:
+                highest = max(highest, end_price)   
+                if highest / end_price > self.config.stop_lost_ratio + 1 and self.config.stop_lost_ratio > 0:
                     return end_price/start_price - 1
         return end_price/start_price - 1
 

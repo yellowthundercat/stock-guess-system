@@ -10,6 +10,18 @@ PMI_df = pd.DataFrame(PMI)
 PMI_df["release_date"] = pd.to_datetime(PMI_df["release_date"])
 PMI_df.set_index("release_date", inplace=True)
 
+def get_analysis_feature(company_data: ICompany, quarter: int, year: int) -> list:
+    recommended_price, sell, buy = 0, 0, 0
+    for date_str, source in company_data.analysis_reports.keys():
+        date = pd.Timestamp(date_str)
+        if date.year == year and date.month in range(quarter * 3 - 2, quarter * 3 + 1):
+            if company_data.analysis_reports[(date_str, source)].recommend == "MUA":
+                buy += 1
+            else:
+                sell += 1
+            recommended_price += company_data.analysis_reports[(date_str, source)].targetPrice
+    return [recommended_price/(sell+buy), sell, buy] if sell+buy != 0 else [0, 0, 0]
+
 def get_quarter_data(company_data: ICompany, period: str) -> list:
     row = company_data.finances.loc[period]
     quarter = int(row['quarter'])
@@ -20,16 +32,7 @@ def get_quarter_data(company_data: ICompany, period: str) -> list:
         if deal.deal_announce_date.year == year and deal.deal_announce_date.month in range(quarter * 3 - 2, quarter * 3 + 1):
             total_amount += deal.deal_quantity
     quarter_data += [total_amount]
-    recommended_price, sell, buy = 0, 0, 0
-    for date_str, source in company_data.analysis_reports.keys():
-        date = pd.Timestamp(date_str)
-        if date.year == year and date.month in range(quarter * 3 - 2, quarter * 3 + 1):
-            if company_data.analysis_reports[(date_str, source)].recommend == "MUA":
-                buy += 1
-            else:
-                sell += 1
-            recommended_price += company_data.analysis_reports[(date_str, source)].targetPrice
-    quarter_data += [recommended_price/(sell+buy), sell, buy] if sell+buy != 0 else [0, 0, 0]
+    quarter_data += get_analysis_feature(company_data, quarter, year)
     return quarter_data
     
 def get_flat_data(company_data: ICompany, macro_data: IMacro, year: int) -> list:

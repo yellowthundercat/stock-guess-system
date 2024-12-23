@@ -5,6 +5,8 @@ import numpy as np
 from pandas import DataFrame
 import tensorflow as tf
 
+from attribute_finder.constant import *
+
 @dataclass
 class IDeal:
     deal_announce_date: date 
@@ -86,10 +88,10 @@ class IMacro:
 class Input_Data:
     # trial: 2022-01-01 -> 2024-12-01 - 7 month -> 2.5 years -> 500 points -> 25% = 125 points, around 6 months
     # real: 2018-01-01 -> 2024-12-01 - 7 month -> 6.5 years -> 1300 points -> 25% = 325 points, around 16 months
-    day_data: np.ndarray = np.empty((0, 20, 29)) # 1 month
-    month_data: np.ndarray = np.empty((0, 12, 13)) # 1 years
-    quarter_data: np.ndarray = np.empty((0, 8, 51)) # 2 years
-    flat_data: np.ndarray = np.empty((0, 17)) 
+    day_data: np.ndarray = np.empty((0, 20, DAY_SIZE)) # 1 month
+    month_data: np.ndarray = np.empty((0, 12, MONTH_SIZE)) # 1 years
+    quarter_data: np.ndarray = np.empty((0, 8, QUARTER_SIZE)) # 2 years
+    flat_data: np.ndarray = np.empty((0, FLAT_SIZE)) 
     # need embedding 
     name_data: np.ndarray = np.array([]) # size (None)
     industry_id_data: np.ndarray = np.array([]) # size (None)

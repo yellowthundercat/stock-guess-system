@@ -210,6 +210,11 @@ def load_macro_online(date_begin: date, date_end: date, extend_date_begin: date)
         cny_month=load_fx_online(CNYVND, extend_date_begin, date_end, '1M')
     )
 
+def format_financial_data(df: pd.DataFrame, extracted_columns: list) -> pd.DataFrame:
+    for col in extracted_columns:
+        if col not in df.columns:
+            df[col] = 0
+    return df[extracted_columns]
 def load_company_online(name: str, date_begin: date, date_end: date, extend_date_begin: date) -> ICompany:
     tcbs_stock_api.update_symbol(name)
     company_overview = tcbs_stock_api.company.overview()
@@ -227,14 +232,26 @@ def load_company_online(name: str, date_begin: date, date_end: date, extend_date
     ]
 
     income_statement = tcbs_stock_api.finance.income_statement(period='quarter')
+    extract_columns = [ 'quarter', 'year',
+                        'revenue', 'year_revenue_growth', 'cost_of_good_sold', 'gross_profit',
+                        'operation_expense', 'operation_profit', 'year_operation_profit_growth',
+                        'interest_expense', 'pre_tax_profit', 'post_tax_profit', 'share_holder_income', 'ebitda']
+    income_statement = format_financial_data(income_statement, extract_columns)
     balance_sheet = tcbs_stock_api.finance.balance_sheet(period='quarter')
+    extract_columns = ['short_asset', 'cash', 'short_invest', 'short_receivable', 'inventory', 'long_asset',
+                       'fixed_asset', 'asset', 'debt', 'short_debt', 'long_debt', 'equity', 'capital', 'un_distributed_income',
+                       'minor_share_holder_profit', 'payable']
+    balance_sheet = format_financial_data(balance_sheet, extract_columns)
     cash_flow = tcbs_stock_api.finance.cash_flow(period='quarter')
+    extract_columns = ['invest_cost', 'from_invest', 'from_financial', 'from_sale', 'free_cash_flow']
+    cash_flow = format_financial_data(cash_flow, extract_columns)
     ratio = tcbs_stock_api.finance.ratio(period='quarter')
     # ratio['quarter'] = ratio['quarter'].astype(str) # convert to string for merging
-    ratio = ratio[['price_to_earning', 'price_to_book', 'roe', 'roa', 'equity_on_liability',
-                   'gross_profit_margin', 'operating_profit_margin', 'debt_on_equity', 'cash_on_equity']]
-    merged_df = pd.merge(income_statement, balance_sheet, on=['quarter', 'year', 'period'], how='inner')
-    merged_df = pd.merge(merged_df, cash_flow, on=['quarter', 'year', 'period'], how='inner')
+    extract_columns = ['price_to_earning', 'price_to_book', 'roe', 'roa', 'equity_on_liability',
+                   'gross_profit_margin', 'operating_profit_margin', 'debt_on_equity', 'cash_on_equity']
+    ratio = format_financial_data(ratio, extract_columns)
+    merged_df = pd.merge(income_statement, balance_sheet, on=['period'], how='inner')
+    merged_df = pd.merge(merged_df, cash_flow, on=['period'], how='inner')
     merged_df = pd.merge(merged_df, ratio, on=['period'], how='inner')
 
     return ICompany(
