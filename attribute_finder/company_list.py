@@ -1,4 +1,4 @@
-[
+company_list = [
     "AAA",
     "AAS",
     "ABB",

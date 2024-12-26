@@ -104,6 +104,7 @@ def get_month_data(company_data: ICompany, macro_data: IMacro, date: pd.Timestam
     forex_date = get_nearest_date(macro_data.usd_month.index, date)
     global_date = get_nearest_date(macro_data.gold_month.index, date)
     PMI_date = get_nearest_date(PMI_df.index, date)
+    vnindex_date = get_nearest_date(macro_data.vnindex.month_points.index, date)
     month_data = [
         # company
         company_data.month_points.loc[date, OPEN],
@@ -113,8 +114,8 @@ def get_month_data(company_data: ICompany, macro_data: IMacro, date: pd.Timestam
         company_data.month_points.loc[date, VOLUME],
 
         # macro
-        macro_data.vnindex.month_points.loc[date, CLOSE],
-        macro_data.vnindex.month_points.loc[date, VOLUME],
+        macro_data.vnindex.month_points.loc[vnindex_date, CLOSE],
+        macro_data.vnindex.month_points.loc[vnindex_date, VOLUME],
 
         macro_data.gold_month.loc[global_date, CLOSE],
         macro_data.oil_month.loc[global_date, CLOSE],

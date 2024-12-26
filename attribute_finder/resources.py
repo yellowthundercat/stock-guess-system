@@ -124,6 +124,8 @@ def load_world_bank_online(country: str, indicator: str, year_begin: int, year_e
     return result
     
 def get_the_begin_date(symbol: str) -> date:
+    if symbol == 'VHM':
+        return date(2019, 1, 1)
     left_date = date(2010, 1, 1)
     right_date = date.today()
     while left_date < right_date:
@@ -221,15 +223,19 @@ def load_company_online(name: str, date_begin: date, date_end: date, extend_date
     shareholders = tcbs_stock_api.company.shareholders()
     begin_date_trade[name] = get_the_begin_date(name)
 
-    insider_data_res = tcbs_stock_api.company.insider_deals(page_size=100)
-    insider_deals = [
-        IDeal(
-            deal_announce_date=row['deal_announce_date'].to_pydatetime(),
-            deal_action=row['deal_action'],
-            deal_quantity=row['deal_quantity'],
-            deal_price=row['deal_price']
-        ) for _, row in insider_data_res.iterrows()
-    ]
+    try:
+        insider_data_res = tcbs_stock_api.company.insider_deals(page_size=100)
+        insider_deals = [
+            IDeal(
+                deal_announce_date=row['deal_announce_date'].to_pydatetime(),
+                deal_action=row['deal_action'],
+                deal_quantity=row['deal_quantity'],
+                deal_price=row['deal_price']
+            ) for _, row in insider_data_res.iterrows()
+        ]
+    except Exception as e:
+        logger.error(f"cannot load insider deals for {name}", e)
+        insider_deals = []
 
     income_statement = tcbs_stock_api.finance.income_statement(period='quarter')
     extract_columns = [ 'quarter', 'year',

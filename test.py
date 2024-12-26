@@ -21,7 +21,7 @@ config = Config()
 
 def main():
     data_set = Data_set(config=config)
-    result = data_set.get_quarter_point_input('MSN')
+    result = data_set.prepare_company_data('VCP')
 
 if __name__ == '__main__':
 	main()

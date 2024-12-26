@@ -8,7 +8,8 @@ import time
 
 import pandas as pd
 
-from attribute_finder.attribute_finder import get_analysis_feature, get_day_data, get_flat_data, get_month_data, get_quarter_data
+from attribute_finder import company_list
+from attribute_finder.attribute_finder import get_analysis_feature, get_day_data, get_flat_data, get_month_data, get_nearest_date, get_quarter_data
 from attribute_finder.pmi import PMI
 from attribute_finder.resources import load_company_online, load_macro_online
 from attribute_finder.type import ICompany, IMacro, Input_Data, Output_Data, Scaler_Meta
@@ -56,7 +57,8 @@ class Data_set:
             self.date_begin = config.default_begin_date
             self.date_end = config.default_end_date
             self.extend_date_begin = config.extend_begin_date
-            self.company_list = config.default_company_list
+            self.company_list = company_list.company_list
+            print(self.company_list)
             with open(meta_file, 'w') as f:
                 json.dump({
                     'date_begin': self.date_begin.isoformat(),
@@ -206,6 +208,9 @@ class Data_set:
         for company in self.company_list:
             industry_id = self.companies[company].industry_id if self.config.industry_id == 'v1' else self.companies[company].industry_id_v2
             company_input, company_output = self.prepare_company_data(company)
+            if  np.any(np.isnan(company_input.day_data)):
+                logger.warning(f"company {company} has nan value")
+                company_input.day_data = np.nan_to_num(company_input.day_data)
             comapany_len = company_input.day_data.shape[0]
             validate_size = int(comapany_len * self.config.validate_rate)
             test_size = int(comapany_len * self.config.test_rate)
@@ -302,17 +307,19 @@ class Data_set:
         unique_name = np.unique(train_input.name_data)
         unique_industry = np.unique(train_input.industry_id_data)
         logger.info(f"unique name: {len(unique_name)}, unique industry: {len(unique_industry)}")
-        self.config.name_num = len(unique_name)
-        self.config.industry_num = len(unique_industry)
 
         self.store_preprocessed_data(train_input, train_output, validate_input, validate_output, test_input, test_output, meta)
         return (train_input, train_output), (validate_input, validate_output), (test_input, test_output), meta    
     
     def prepare_company_data(self, company: str) -> tuple[Input_Data, Output_Data]:
+        file_name = os.path.join(self.config.medium_data_path, company + '.pkl')
+        if os.path.exists(file_name):
+            with open(file_name, 'rb') as f:
+                return pickle.load(f)
         logger.info(f"preparing data for company {company}")
         company_data = self.companies[company]
         start_point = max(company_data.begin_trade_date, self.date_begin) + relativedelta(months=1)
-        end_point = self.date_end - relativedelta(months=6)
+        end_point = self.date_end - relativedelta(months=6) - relativedelta(days=5)
 
         # prepare output
         output_data = Output_Data(
@@ -338,11 +345,19 @@ class Data_set:
                 continue
             while len(all_day_data) > 0 and i < all_day_data[0][0]:
                 all_day_data = all_day_data[1:]
-            temp = all_day_data[:self.config.day_data_size, 1:][::-1]
+            temp = all_day_data[:self.config.day_data_size, 1:]
+            if len(temp) < self.config.day_data_size:
+                empty = np.zeros((self.config.day_data_size - len(temp), DAY_SIZE))
+                temp = np.concatenate([temp, empty], axis=0)
+            temp = temp[::-1]
             company_day_data.append(temp)
             while len(all_month_data) > 0 and i < all_month_data[0][0]:
                 all_month_data = all_month_data[1:]
-            temp = all_month_data[:self.config.month_data_size, 1:][::-1]
+            temp = all_month_data[:self.config.month_data_size, 1:]
+            if len(temp) < self.config.month_data_size:
+                empty = np.zeros((self.config.month_data_size - len(temp), MONTH_SIZE))
+                temp = np.concatenate([temp, empty], axis=0)
+            temp = temp[::-1]
             company_month_data.append(temp)
             while len(all_quarter_data) > 0 and (i.year < all_quarter_data[0][1] or 
                                                  (i.year == all_quarter_data[0][1] and i.quarter <= all_quarter_data[0][0])):
@@ -368,6 +383,8 @@ class Data_set:
             quarter_data=np.nan_to_num(np.array(company_quarter_data)).astype(float),
             flat_data=np.nan_to_num(np.array(company_flat_data)).astype(float)
         )
+        with open(file_name, 'wb') as f:
+            pickle.dump((input_data, output_data), f)
         return (input_data, output_data)
     
     def get_flat_point_input(self, company: str) -> np.ndarray:
@@ -412,14 +429,35 @@ class Data_set:
 
     
     def get_company_result(self, company: str, start_point: date, end_point: date, delta: relativedelta) -> np.ndarray:
+        if self.config.stop_lost_ratio <= 0:
+            return self.get_company_result_without_stop_lost(company, start_point, end_point, delta)
         result = []
         for i in pd.date_range(start_point, end_point):
             if i in self.companies[company].day_points.index:
                 result.append(self.get_point_result(company, i, delta))
         return np.array(result)
+    
+    def get_company_result_without_stop_lost(self, company: str, start_point: date, end_point: date, delta: relativedelta) -> np.ndarray:
+        result = []
+        for i in pd.date_range(start_point, end_point):
+            if i in self.companies[company].day_points.index:
+                start_price = self.companies[company].day_points.loc[i, CLOSE]
+                estimated_end = i + delta
+                while estimated_end not in self.companies[company].day_points.index:
+                    estimated_end += pd.Timedelta(days=1)
+                end_price = self.companies[company].day_points.loc[estimated_end, CLOSE]
+                if start_price == 0:
+                    logger.warning(f"start price is 0 at {i}")
+                    result.append(0)
+                else:
+                    result.append(end_price/start_price - 1)
+        return np.array(result)
 
     def get_point_result(self, company: str, date: pd.Timestamp, delta: relativedelta) -> float:
         start_price = self.companies[company].day_points.loc[date, CLOSE]
+        if start_price == 0:
+            logger.warning(f"start price is 0 at {date}")
+            return 0
         highest = start_price
         end_price = start_price
         for i in pd.date_range(date, date + delta):
