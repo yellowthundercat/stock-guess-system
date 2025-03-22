@@ -13,15 +13,13 @@ from attribute_finder.type import *
 from config.config import Config
 from dateutil.relativedelta import relativedelta
 
-from model.model import Stock_Model, save_model, load_model
-from utils.utils import revert_scale
-
 config = Config()
 
 
 def main():
-    data_set = Data_set(config=config)
-    result = data_set.prepare_company_data('VCP')
+    # data_set = Data_set(config=config)
+    # result = data_set.prepare_company_data('VCP')
+	print('Hello, World!')
 
 if __name__ == '__main__':
 	main()

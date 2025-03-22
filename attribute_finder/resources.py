@@ -1,3 +1,5 @@
+import datetime
+import json
 import time
 import requests
 from attribute_finder.constant import *
@@ -8,17 +10,27 @@ import pandas as pd
 import pandas_ta as ta
 import wbgapi as wb
 import yfinance as yf
+from dateutil.relativedelta import relativedelta
 
 from config.config import Config
 from utils.logger import Logger
 
+
+from vnstock3.explorer.fmarket.fund import Fund
+
+from utils.utils import as_df, get_header
+
 tcbs_stock_api = Vnstock().stock(symbol='MSN', source="TCBS")
 vci_stock_api = Vnstock().stock(symbol='MSN', source="VCI")
-fx_stock_api = Vnstock().fx(symbol=USDVND, source='MSN')
+# fx_stock_api = Vnstock().fx(symbol=USDVND, source='MSN')
 
 logger = Logger(Config.log_level)
 
 begin_date_trade = {}
+
+VCI_HEADER = get_header()
+
+SIMPLIZE_URL = "https://api.simplize.vn/api/company/analysis-report/list"
 
 def add_ta(df: pd.DataFrame) -> pd.DataFrame:
     # TA: Technical Analysis
@@ -36,6 +48,17 @@ def add_ta(df: pd.DataFrame) -> pd.DataFrame:
     )
     df.ta.strategy(my_strategy) 
     return df
+
+def retry(func):
+    def inner(*args, **kwargs):
+        for i in range(3):
+            try:
+                return func(*args, **kwargs)
+            except Exception as e:
+                logger.error(f"retry {func.__name__} {i} times", e)
+                time.sleep(1)
+        raise ConnectionError(f"Cannot load data from {func.__name__}")
+    return inner
 
 def load_chunk_time(real_func):
     def inner(symbol: str, date_begin: date, date_end: date, interval: str) -> pd.DataFrame:
@@ -90,6 +113,7 @@ def vnstock_to_time_data(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 @load_chunk_time
+@retry
 def load_fx_online(symbol: str, date_begin: date, date_end: date, interval: str) -> pd.DataFrame:
     logger.info(f"loading fx data {symbol} from {date_begin} to {date_end} with interval {interval}")
     historical_data = fx_stock_api.quote.history(symbol=symbol, start=date_begin.isoformat(), end=date_end.isoformat(), interval=interval)
@@ -97,6 +121,7 @@ def load_fx_online(symbol: str, date_begin: date, date_end: date, interval: str)
     return df
 
 @load_chunk_time
+@retry
 def load_yahoo_finance_online(symbol: str, date_begin: date, date_end: date, interval: str) -> pd.DataFrame:
     logger.info(f"loading yahoo finance data {symbol} from {date_begin} to {date_end} with interval {interval}")
     ticker = yf.Ticker(symbol)
@@ -106,13 +131,14 @@ def load_yahoo_finance_online(symbol: str, date_begin: date, date_end: date, int
     return df
 
 @load_chunk_time
+@retry
 def load_vnstock_online(symbol: str, date_begin: date, date_end: date, interval: str) -> pd.DataFrame:
     logger.info(f"loading vnstock data {symbol} from {date_begin} to {date_end} with interval {interval}")
-    vci_stock_api.update_symbol(symbol)
-    historical_data = vci_stock_api.quote.history(start=date_begin.isoformat(), end=date_end.isoformat(), interval=interval)
+    historical_data = vci_stock_api.quote.history(symbol=symbol, start=date_begin.isoformat(), end=date_end.isoformat(), interval=interval)
     df = vnstock_to_time_data(historical_data)
     return df
 
+@retry
 def load_world_bank_online(country: str, indicator: str, year_begin: int, year_end: int) -> dict[int, float]:
     logger.info(f"loading world bank data {indicator} for {country} from {year_begin} to {year_end}")
     if year_begin >= year_end:
@@ -123,6 +149,7 @@ def load_world_bank_online(country: str, indicator: str, year_begin: int, year_e
         result[year] = row['value']
     return result
     
+@retry
 def get_the_begin_date(symbol: str) -> date:
     if symbol == 'VHM':
         return date(2019, 1, 1)
@@ -139,8 +166,8 @@ def get_the_begin_date(symbol: str) -> date:
     logger.info(f"the begin date of {symbol} is {right_date}")
     return right_date
 
+@retry
 def load_analysis_report_online(symbol: str) -> dict[(date, str), IAnalysis_Report]:
-    url = "https://api.simplize.vn/api/company/analysis-report/list"
     result = {}
     page_number = 0
     while True:
@@ -151,7 +178,7 @@ def load_analysis_report_online(symbol: str) -> dict[(date, str), IAnalysis_Repo
             "size": CHUNK_SIZE
         }
         page_number += 1
-        response = requests.get(url, params=params)
+        response = requests.get(SIMPLIZE_URL, params=params)
         if response.status_code == 200:
             res = response.json()
             total = res['total']
@@ -173,6 +200,7 @@ def load_analysis_report_online(symbol: str) -> dict[(date, str), IAnalysis_Repo
     logger.info(f"loaded {len(result)} analysis reports for {symbol}")
     return result
 
+@retry
 def load_country_online(country: str, year_begin: int, year_end: int) -> ICountry:
     return ICountry(
         name=country,
@@ -184,6 +212,7 @@ def load_country_online(country: str, year_begin: int, year_end: int) -> ICountr
         government_debt=load_world_bank_online(country, GOVERNMENT_DEBT, year_begin, year_end)
     )
 
+@retry
 def load_macro_online(date_begin: date, date_end: date, extend_date_begin: date) -> IMacro:
     return IMacro(
         vnindex=load_company_online(VNINDEX, date_begin, date_end, extend_date_begin),
@@ -217,6 +246,8 @@ def format_financial_data(df: pd.DataFrame, extracted_columns: list) -> pd.DataF
         if col not in df.columns:
             df[col] = 0
     return df[extracted_columns]
+
+@retry
 def load_company_online(name: str, date_begin: date, date_end: date, extend_date_begin: date) -> ICompany:
     tcbs_stock_api.update_symbol(name)
     company_overview = tcbs_stock_api.company.overview()
@@ -278,12 +309,14 @@ def load_company_online(name: str, date_begin: date, date_end: date, extend_date
         analysis_reports=load_analysis_report_online(name)
     )
 
+@retry
 def get_company_equity(symbol: str) -> float:
     vci_stock_api.update_symbol(symbol)
     balance_sheet = vci_stock_api.finance.balance_sheet(period='quarter')
     first_row = balance_sheet.iloc[0]
     return first_row["OWNER'S EQUITY(Bn.VND)"] / 1000000000
 
+@retry
 def get_company_average_volume(symbol: str) -> float:
     vci_stock_api.update_symbol(symbol)
     current_date = date.today()
@@ -291,17 +324,18 @@ def get_company_average_volume(symbol: str) -> float:
     historical_data = vci_stock_api.quote.history(start=begin_date.isoformat(), end=current_date.isoformat(), interval='1D')
     return (historical_data['volume'].mean() * historical_data['close'].mean()) / 1000000
     
-def get_company_list() -> list[str]:
+@retry
+def get_company_list(min_equity: float, min_volume: float) -> list[str]:
     result = []
     companies = vci_stock_api.listing.all_symbols()
     for _, row in companies.iterrows():
         symbol = row['ticker']
         try:
             equity = get_company_equity(symbol)
-            if equity < 1000:
+            if equity < min_equity:
                 continue
             average_volume = get_company_average_volume(symbol)
-            if average_volume < 1:
+            if average_volume < min_volume:
                 continue
         except Exception as e:
             logger.error(f"cannot load company {symbol} ", e)
@@ -309,9 +343,159 @@ def get_company_list() -> list[str]:
         print(symbol, equity, average_volume)
             
         result.append(symbol)
-    
-    # save to file
-    with open('company_list.txt', 'w') as f:
-        for item in result:
-            f.write("%s\n" % item)
+
     return result
+
+# by fund and vn100
+@retry
+def get_invested_companies() -> dict[str, int]:
+    fund = Fund()
+    result = dict()
+    companies = list(vci_stock_api.listing.symbols_by_group('VN100'))
+    for c in companies:
+        result[c] = 1
+
+    funds = fund.listing('STOCK')
+    for f in funds['short_name']:
+        top_companies = fund.details.top_holding(f)
+        # check exist stock code
+        if 'stock_code' not in top_companies.columns:
+            continue
+        for c in top_companies['stock_code']:
+            result[c] = result.get(c, 0) + 1
+    return result
+
+# get pe, pb and its mean value (5 years) for invested companies
+@retry
+def get_company_p(symbol: str) -> tuple[float, float, float, float, float, float, float]:
+    current_date = date.today()
+    vci_stock_api.update_symbol(symbol)
+    ratio = vci_stock_api.finance.ratio(period='year', lang='vi') 
+
+    price_df = load_vnstock_online(symbol, current_date - timedelta(days=30), current_date, '1D')
+    price = price_df.iloc[-1][CLOSE]
+
+    try:
+        ratio_quarter = vci_stock_api.finance.ratio(period='quarter', lang='vi')
+        current_pe = ratio_quarter.iloc[0][('Chỉ tiêu định giá', 'P/E')]
+        current_pb = ratio_quarter.iloc[0][('Chỉ tiêu định giá', 'P/B')]
+    except Exception as e:
+        logger.error(f"cannot load current pe, pb for {symbol}", e)
+        current_pe = ratio.iloc[0][('Chỉ tiêu định giá', 'P/E')]
+        current_pb = ratio.iloc[0][('Chỉ tiêu định giá', 'P/B')]
+
+    sum_pe = 0
+    sum_pb = 0
+    count = 0
+    
+    for _, row in ratio.iterrows():
+        year = row[('Meta', 'Năm')]
+        if year < current_date.year - 10:
+            break
+        count += 1
+        sum_pe += row[('Chỉ tiêu định giá', 'P/E')]
+        sum_pb += row[('Chỉ tiêu định giá', 'P/B')]
+
+    # get lowest price in last 5 days
+    lowest_week = price_df.tail(5).min()[CLOSE]
+    lowest_month = price_df.min()[CLOSE]
+    
+    if count == 0:
+        return current_pe, current_pb, 0, 0, price, lowest_week, lowest_month
+    return current_pe, current_pb, sum_pe / count, sum_pb / count, price, lowest_week, lowest_month
+
+@retry
+def get_recommend_price(symbol: str) -> float:
+    current_date = date.today()
+    params = {
+        "ticker": symbol,
+        "isWl": "false",
+        "page": 0,
+        "size": 10
+    }
+    response = requests.get(SIMPLIZE_URL, params=params)
+    if response.status_code == 200:
+        res = response.json()
+        sum_price = 0
+        count = 0
+        data = res['data']
+        for row in data:
+            if 'targetPrice' not in row or 'issueDate' not in row:
+                continue
+            issue_date = datetime.datetime.strptime(row['issueDate'], "%d/%m/%Y").date()
+            if current_date > issue_date + timedelta(days=90):
+                continue
+            
+            sum_price += row['targetPrice']
+            count += 1
+        return sum_price / count / 1000 if count > 0 else 0
+    return 0
+
+
+@retry
+def manual_load_quote(symbol: str, date_begin: datetime.datetime, date_end: datetime.datetime, interval: str) -> pd.DataFrame:
+    logger.info(f"loading vnstock data {symbol} from {date_begin} to {date_end} with interval {interval}")
+
+    url = TRADING_URL + CHART_URL 
+
+    payload = json.dumps({
+        "timeFrame": INTERVAL_MAP[interval],
+        "symbols": [symbol],
+        "from": int(date_begin.timestamp()),
+        "to": int(date_end.timestamp())
+        })
+    
+    response = requests.post(url, headers=VCI_HEADER, data=payload)
+
+    if response.status_code != 200:
+        raise ConnectionError(f"Failed to fetch data: {response.status_code} - {response.reason}")
+    json_data = response.json()
+    if not json_data:
+            raise ValueError("Không tìm thấy dữ liệu. Vui lòng kiểm tra lại mã chứng khoán hoặc thời gian truy xuất.")
+    
+    df = as_df(history_data=json_data[0], interval=interval)
+    df = vnstock_to_time_data(df)
+    return df
+
+# signal: volume spike, rsi 30, 70, MACD
+@retry
+def get_anomaly_signal(symbol: str) -> tuple[float, float, bool, bool, bool]:
+    current_date = pd.Timestamp.today().normalize()
+    start_date = current_date - relativedelta(months=2)
+    try:
+        df = manual_load_quote(symbol, start_date.to_pydatetime(), current_date.to_pydatetime(), '1D')
+        my_strategy = ta.Strategy(
+            name="My Combined Strategy",
+            ta=[
+                {"kind": "rsi", "length": 14},             # RSI
+                {"kind": "macd", "fast": 12, "slow": 26, "signal": 9},  # MACD
+                {"kind": "sma", "close": "volume", "length": 20},       # Volume SMA 20
+                {"kind": "sma", "close": "volume", "length": 5},       # Volume SMA 5
+            ]
+        )
+    
+        df.ta.strategy(my_strategy)
+    
+        is_volume_spike = 0
+        is_volume_increase = 0
+        is_rsi_30 = False
+        is_rsi_70 = False
+        is_macd_cross = False
+        for i in pd.date_range(current_date - relativedelta(days=6), current_date):
+            if i not in df.index:
+                continue
+            if df.at[i, 'Volume'] > df.at[i, 'SMA_20'] * 3:
+                is_volume_spike = max(is_volume_spike, df.at[i, 'Volume']/df.at[i, 'SMA_20'])
+            if df.at[i, 'SMA_5'] > df.at[i, 'SMA_20'] * 2:
+                is_volume_increase = max(is_volume_increase, df.at[i, 'SMA_5']/df.at[i, 'SMA_20'])
+            if df.at[i, 'RSI_14'] < 30:
+                is_rsi_30 = True
+            if df.at[i, 'RSI_14'] > 70:
+                is_rsi_70 = True
+            previous_i = df.index.get_loc(i) - 1
+            if df.at[i, 'MACDh_12_26_9'] * df.iloc[previous_i]['MACDh_12_26_9'] < 0:
+                is_macd_cross = True
+    except Exception as e:
+        logger.error(f"cannot load anomaly signal for {symbol}", e)
+        return 0, 0, False, False, False 
+    return is_volume_spike, is_volume_increase, is_rsi_30, is_rsi_70, is_macd_cross
