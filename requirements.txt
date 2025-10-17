@@ -1,4 +1,4 @@
-vnstock3==3.2.1
+vnstock==3.2.3
 wbgapi==1.0.12
 yfinance=0.2.50
 pandas_ta=0.3.14b0

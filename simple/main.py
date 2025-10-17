@@ -31,7 +31,7 @@ def store_company_list():
         old_extended_company = data['extended_company']
     
     invested_company = get_invested_companies()
-    all_company = get_company_list(min_equity=500, min_volume=0.5)
+    all_company = get_company_list(min_equity=1000, min_volume=0.5)
 
     extended_company = []
     for c in all_company:
@@ -80,6 +80,7 @@ def store_company_insight():
     avg_pbs = []
     lowest_weekly_change = []
     lowest_monthly_change = []
+    delta_ma_200s = []
     funds = []
     recommend_prices = []
     current_prices = []
@@ -88,20 +89,21 @@ def store_company_insight():
     merge_company.sort()
     for c in merge_company:
         try:
-            current_pe, current_pb, avg_pe, avg_pb, price, lowest_week, lowest_month = get_company_p(c)
+            current_pe, current_pb, avg_pe, avg_pb, price, lowest_week, lowest_month, delta_ma_200 = get_company_p(c)
             company_names.append(c)
             pes.append(round(current_pe, 2))
             avg_pes.append(round(avg_pe, 2))
             pbs.append(round(current_pb, 2))
             avg_pbs.append(round(avg_pb, 2))
             funds.append(invested_company.get(c, 0))
-            recommend = round(get_recommend_price(c), 2)
+            recommend = round(get_recommend_price(c, price), 2)
             recommend_prices.append(recommend)
             current_prices.append(price)
             predict = round((recommend - price) / price, 4)
             predict_upsides.append(predict)
             lowest_weekly_change.append(round((price - lowest_week) / lowest_week, 4))
             lowest_monthly_change.append(round((price - lowest_month) / lowest_month, 4))
+            delta_ma_200s.append(round(delta_ma_200, 4))
         except Exception as e:
             print('Error:', c, e)
             continue
@@ -115,9 +117,10 @@ def store_company_insight():
         'Fund': funds,
         'Analysis': recommend_prices,
         'Current Price': current_prices,
-        'Predict Upside': predict_upsides,
         'Lowest Weekly Change': lowest_weekly_change,
-        'Lowest Monthly Change': lowest_monthly_change
+        'Lowest Monthly Change': lowest_monthly_change,
+        'Delta MA 200': delta_ma_200s,
+        'Predict Upside': predict_upsides
     })
     df.to_csv(company_insight_file_name, index=False)
 
@@ -154,7 +157,9 @@ def store_anomaly():
         is_invested = []
     
     co = 0
-    for c in all_company:
+    merge_company = list(invested_company.keys()) + extended_company
+    merge_company.sort()
+    for c in merge_company:
         if c in checked:
             continue
 

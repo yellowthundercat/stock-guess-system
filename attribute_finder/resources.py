@@ -4,7 +4,8 @@ import time
 import requests
 from attribute_finder.constant import *
 from attribute_finder.type import IAnalysis_Report, ICompany, ICountry, IDeal, IMacro
-from vnstock3 import Vnstock
+# from vnstock import Vnstock
+from clone_vnstock.vnstock_main.vnstock import Vnstock
 from datetime import date, timedelta
 import pandas as pd
 import pandas_ta as ta
@@ -16,7 +17,8 @@ from config.config import Config
 from utils.logger import Logger
 
 
-from vnstock3.explorer.fmarket.fund import Fund
+# from vnstock.explorer.fmarket.fund import Fund
+from clone_vnstock.vnstock_main.vnstock.explorer.fmarket.fund import Fund
 
 from utils.utils import as_df, get_header
 
@@ -309,14 +311,14 @@ def load_company_online(name: str, date_begin: date, date_end: date, extend_date
         analysis_reports=load_analysis_report_online(name)
     )
 
-@retry
+# @retry
 def get_company_equity(symbol: str) -> float:
     vci_stock_api.update_symbol(symbol)
     balance_sheet = vci_stock_api.finance.balance_sheet(period='quarter')
     first_row = balance_sheet.iloc[0]
     return first_row["OWNER'S EQUITY(Bn.VND)"] / 1000000000
 
-@retry
+# @retry
 def get_company_average_volume(symbol: str) -> float:
     vci_stock_api.update_symbol(symbol)
     current_date = date.today()
@@ -329,7 +331,7 @@ def get_company_list(min_equity: float, min_volume: float) -> list[str]:
     result = []
     companies = vci_stock_api.listing.all_symbols()
     for _, row in companies.iterrows():
-        symbol = row['ticker']
+        symbol = row['symbol']
         try:
             equity = get_company_equity(symbol)
             if equity < min_equity:
@@ -358,6 +360,8 @@ def get_invested_companies() -> dict[str, int]:
     funds = fund.listing('STOCK')
     for f in funds['short_name']:
         top_companies = fund.details.top_holding(f)
+        # stop for rate limit
+        # time.sleep(1)
         # check exist stock code
         if 'stock_code' not in top_companies.columns:
             continue
@@ -367,13 +371,20 @@ def get_invested_companies() -> dict[str, int]:
 
 # get pe, pb and its mean value (5 years) for invested companies
 @retry
-def get_company_p(symbol: str) -> tuple[float, float, float, float, float, float, float]:
-    current_date = date.today()
+def get_company_p(symbol: str) -> tuple[float, float, float, float, float, float, float, float]:
+    # current_date = date.today()
     vci_stock_api.update_symbol(symbol)
     ratio = vci_stock_api.finance.ratio(period='year', lang='vi') 
 
-    price_df = load_vnstock_online(symbol, current_date - timedelta(days=30), current_date, '1D')
-    price = price_df.iloc[-1][CLOSE]
+    # price_df = load_vnstock_online(symbol, current_date - timedelta(days=30), current_date, '1D')
+    current_date = pd.Timestamp.today().normalize()
+    start_date = current_date - relativedelta(months=10)
+    price_df = manual_load_quote(symbol, start_date.to_pydatetime(), current_date.to_pydatetime(), '1D')
+
+    # yesterday = current_date - timedelta(days=1)
+    # price_hour_df = manual_load_quote(symbol, yesterday.to_pydatetime(), current_date.to_pydatetime(), '1H')
+    board = vci_stock_api.trading.price_board(symbols_list=[symbol])
+    price = board.iloc[-1][('match', 'match_price')]
 
     try:
         ratio_quarter = vci_stock_api.finance.ratio(period='quarter', lang='vi')
@@ -398,37 +409,59 @@ def get_company_p(symbol: str) -> tuple[float, float, float, float, float, float
 
     # get lowest price in last 5 days
     lowest_week = price_df.tail(5).min()[CLOSE]
-    lowest_month = price_df.min()[CLOSE]
+    lowest_month = price_df.tail(20).min()[CLOSE]
+    ma_200 = price_df.mean()[CLOSE]
+    delta_ma_200 = (price - ma_200) / ma_200
     
     if count == 0:
-        return current_pe, current_pb, 0, 0, price, lowest_week, lowest_month
-    return current_pe, current_pb, sum_pe / count, sum_pb / count, price, lowest_week, lowest_month
+        return current_pe, current_pb, 0, 0, price, lowest_week, lowest_month, delta_ma_200
+    return current_pe, current_pb, sum_pe / count, sum_pb / count, price, lowest_week, lowest_month, delta_ma_200
 
 @retry
-def get_recommend_price(symbol: str) -> float:
+def get_recommend_price(symbol: str, actual_price: float = 0) -> float:
     current_date = date.today()
     params = {
         "ticker": symbol,
         "isWl": "false",
         "page": 0,
-        "size": 10
+        "size": 5
     }
     response = requests.get(SIMPLIZE_URL, params=params)
     if response.status_code == 200:
         res = response.json()
-        sum_price = 0
-        count = 0
         data = res['data']
+        
+        weighted_sum = 0
+        total_weight = 0
+        min_days_diff = float('inf')  # Track the most recent report
+        
         for row in data:
             if 'targetPrice' not in row or 'issueDate' not in row:
                 continue
             issue_date = datetime.datetime.strptime(row['issueDate'], "%d/%m/%Y").date()
-            if current_date > issue_date + timedelta(days=90):
-                continue
+            days_diff = (current_date - issue_date).days
             
-            sum_price += row['targetPrice']
-            count += 1
-        return sum_price / count / 1000 if count > 0 else 0
+            # Skip reports older than 1 year
+            if days_diff > 365:
+                continue
+                
+            # Track the most recent report for discount calculation
+            min_days_diff = min(min_days_diff, days_diff)
+                
+            # Use 1/days_diff as weight (with minimum weight for very recent reports)
+            weight = 1.0 / max(days_diff, 5)  # Avoid division by zero
+            
+            weighted_sum += row['targetPrice'] * weight
+            total_weight += weight
+        
+        expected_price = weighted_sum / total_weight if total_weight > 0 else 0
+        
+        # Apply discount based on age of most recent report
+        if min_days_diff > 30 and expected_price > actual_price and actual_price > 0:
+            discount_rate = min_days_diff/ 365
+            expected_price -= (expected_price - actual_price) * discount_rate
+            
+        return expected_price
     return 0
 
 
